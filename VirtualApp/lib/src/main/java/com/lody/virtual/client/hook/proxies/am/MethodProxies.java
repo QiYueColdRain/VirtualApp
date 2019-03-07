@@ -28,6 +28,7 @@ import android.os.IBinder;
 import android.os.IInterface;
 import android.os.RemoteException;
 import android.text.TextUtils;
+import android.util.Log;
 import android.util.TypedValue;
 
 import com.lody.virtual.client.VClientImpl;
@@ -55,6 +56,7 @@ import com.lody.virtual.helper.utils.ArrayUtils;
 import com.lody.virtual.helper.utils.BitmapUtils;
 import com.lody.virtual.helper.utils.ComponentUtils;
 import com.lody.virtual.helper.utils.DrawableUtils;
+import com.lody.virtual.helper.utils.FileUtils;
 import com.lody.virtual.helper.utils.Reflect;
 import com.lody.virtual.helper.utils.VLog;
 import com.lody.virtual.os.VUserHandle;
@@ -63,6 +65,10 @@ import com.lody.virtual.remote.AppTaskInfo;
 import com.lody.virtual.server.interfaces.IAppRequestListener;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 import java.util.List;
@@ -73,6 +79,8 @@ import mirror.android.app.LoadedApk;
 import mirror.android.content.ContentProviderHolderOreo;
 import mirror.android.content.IIntentReceiverJB;
 import mirror.android.content.pm.UserInfo;
+
+import static com.lody.virtual.client.stub.VASettings.INTERCEPT_BACK_HOME;
 
 /**
  * @author Lody
@@ -360,6 +368,7 @@ class MethodProxies {
 
         private static final String SCHEME_FILE = "file";
         private static final String SCHEME_PACKAGE = "package";
+        private static final String SCHEME_CONTENT = "content";
 
         @Override
         public String getMethodName() {
@@ -368,6 +377,9 @@ class MethodProxies {
 
         @Override
         public Object call(Object who, Method method, Object... args) throws Throwable {
+
+            Log.d("Q_M", "---->StartActivity 类");
+
             int intentIndex = ArrayUtils.indexOfObject(args, Intent.class, 1);
             if (intentIndex < 0) {
                 return ActivityManagerCompat.START_INTENT_NOT_RESOLVED;
@@ -427,9 +439,22 @@ class MethodProxies {
             ActivityInfo activityInfo = VirtualCore.get().resolveActivityInfo(intent, userId);
             if (activityInfo == null) {
                 VLog.e("VActivityManager", "Unable to resolve activityInfo : " + intent);
+
+                Log.d("Q_M", "---->StartActivity who=" + who);
+                Log.d("Q_M", "---->StartActivity intent=" + intent);
+                Log.d("Q_M", "---->StartActivity resultTo=" + resultTo);
+
                 if (intent.getPackage() != null && isAppPkg(intent.getPackage())) {
                     return ActivityManagerCompat.START_INTENT_NOT_RESOLVED;
                 }
+
+                if (INTERCEPT_BACK_HOME && Intent.ACTION_MAIN.equals(intent.getAction())
+                        && intent.getCategories().contains("android.intent.category.HOME")
+                        && resultTo != null) {
+                    VActivityManager.get().finishActivity(resultTo);
+                    return 0;
+                }
+
                 return method.invoke(who, args);
             }
             int res = VActivityManager.get().startActivity(intent, activityInfo, resultTo, options, resultWho, requestCode, VUserHandle.myUserId());
@@ -471,6 +496,32 @@ class MethodProxies {
                     File sourceFile = new File(packageUri.getPath());
                     try {
                         listener.onRequestInstall(sourceFile.getPath());
+                        return true;
+                    } catch (RemoteException e) {
+                        e.printStackTrace();
+                    }
+                } else if (SCHEME_CONTENT.equals(packageUri.getScheme())) {
+                    InputStream inputStream = null;
+                    OutputStream outputStream = null;
+                    File sharedFileCopy = new File(getHostContext().getCacheDir(), packageUri.getLastPathSegment());
+                    try {
+                        inputStream = getHostContext().getContentResolver().openInputStream(packageUri);
+                        outputStream = new FileOutputStream(sharedFileCopy);
+                        byte[] buffer = new byte[1024];
+                        int count;
+                        while ((count = inputStream.read(buffer)) > 0) {
+                            outputStream.write(buffer, 0, count);
+                        }
+                        outputStream.flush();
+
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    } finally {
+                        FileUtils.closeQuietly(inputStream);
+                        FileUtils.closeQuietly(outputStream);
+                    }
+                    try {
+                        listener.onRequestInstall(sharedFileCopy.getPath());
                         return true;
                     } catch (RemoteException e) {
                         e.printStackTrace();

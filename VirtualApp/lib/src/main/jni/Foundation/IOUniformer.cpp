@@ -4,11 +4,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <fb/include/fb/ALog.h>
-
-extern "C" {
-#include <HookZz/include/hookzz.h>
-}
-
+#include <Substrate/CydiaSubstrate.h>
 
 #include "IOUniformer.h"
 #include "SandboxFs.h"
@@ -75,7 +71,7 @@ hook_function(void *handle, const char *symbol, void *new_func, void **old_func)
     if (addr == NULL) {
         return;
     }
-    ZzHookReplace(addr, new_func, old_func);
+    MSHookFunction(addr, new_func, old_func);
 }
 
 
@@ -86,7 +82,8 @@ void IOUniformer::redirect(const char *orig_path, const char *new_path) {
 }
 
 const char *IOUniformer::query(const char *orig_path) {
-    return reverse_relocate_path(orig_path);
+    int res;
+    return relocate_path(orig_path, &res);
 }
 
 void IOUniformer::whitelist(const char *_path) {
@@ -553,7 +550,7 @@ HOOK_DEF(int, execve, const char *pathname, char *argv[], char *const envp[]) {
      *
      * We will support 64Bit to adopt it.
      */
-    ALOGE("execve : %s", pathname);
+    // ALOGE("execve : %s", pathname); // any output can break exec. See bug: https://issuetracker.google.com/issues/109448553
     int res;
     const char *redirect_path = relocate_path(pathname, &res);
     char *ld = getenv("LD_PRELOAD");
@@ -568,6 +565,7 @@ HOOK_DEF(int, execve, const char *pathname, char *argv[], char *const envp[]) {
         char **new_envp = build_new_env(envp);
         int ret = syscall(__NR_execve, redirect_path, argv, new_envp);
         FREE(redirect_path, pathname);
+        free(new_envp);
         return ret;
     }
     int ret = syscall(__NR_execve, redirect_path, argv, envp);
@@ -643,19 +641,19 @@ void hook_dlopen(int api_level) {
     if (api_level > 23) {
         if (findSymbol("__dl__Z9do_dlopenPKciPK17android_dlextinfoPv", "linker",
                        (unsigned long *) &symbol) == 0) {
-            ZzHookReplace(symbol, (void *) new_do_dlopen_V24,
+            MSHookFunction(symbol, (void *) new_do_dlopen_V24,
                           (void **) &orig_do_dlopen_V24);
         }
     } else if (api_level >= 19) {
         if (findSymbol("__dl__Z9do_dlopenPKciPK17android_dlextinfo", "linker",
                        (unsigned long *) &symbol) == 0) {
-            ZzHookReplace(symbol, (void *) new_do_dlopen_V19,
+            MSHookFunction(symbol, (void *) new_do_dlopen_V19,
                           (void **) &orig_do_dlopen_V19);
         }
     } else {
         if (findSymbol("__dl_dlopen", "linker",
                        (unsigned long *) &symbol) == 0) {
-            ZzHookReplace(symbol, (void *) new_dlopen, (void **) &orig_dlopen);
+            MSHookFunction(symbol, (void *) new_dlopen, (void **) &orig_dlopen);
         }
     }
 }
